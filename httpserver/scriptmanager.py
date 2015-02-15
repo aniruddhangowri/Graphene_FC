@@ -8,7 +8,7 @@ def _validate(data):
     script = ''
     t0, t, d, c, a = None, None, None, None, None
     for l in lines:
-        print l
+        #print l
         t, others = l.split(' ', 1)
         t = int(t)
         if t0 == None: t0 = t
