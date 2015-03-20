@@ -13,6 +13,10 @@ def funcmap(devname, devid):
 
 import threading
 import u6
+# below LabJackException is handled only for initializing the lj handle.
+# This exception was occurring when there was a spike in powerline, and
+# the U6() handle became invalid due to that.
+#
 chan_d = {'lock': threading.RLock(), 'port': None}
 def init_comm():
     global chan_d
@@ -39,7 +43,8 @@ class Switch():
     
     def get_state(self, args):
         with chan_d['lock']:
-            r = chan_d['port'].getDIOState(self.num)
+            try: r = chan_d['port'].getDIOState(self.num)
+            except u6.LabJackException: init_comm()
         print r
         self.curr_st = self._onoff[:r]
         return 'OK', [self.curr_st]
@@ -49,13 +54,15 @@ class Switch():
         if st not in self._onoff.keys(): return 'Error', ['Invalid requested state: '+st]
         #if st == self.curr_st: return 'OK', [st] # do it anyway for now.
         with chan_d['lock']:
-            r = chan_d['port'].setDIOState(self.num, self._onoff[st])
+            try: r = chan_d['port'].setDIOState(self.num, self._onoff[st])
+            except u6.LabJackException: init_comm()
         self.curr_st = st
         return 'OK', [st]
 
     def set_def_state(self, args):
         with chan_d['lock']:
-            r = chan_d['port'].setDIOState(self.num, self._onoff[self.def_st])
+            try: r = chan_d['port'].setDIOState(self.num, self._onoff[self.def_st])
+            except u6.LabJackException: init_comm()
         self.curr_st = self.def_st
         return 'OK', [self.def_st]
 
@@ -74,13 +81,17 @@ def _get_AIN(board, ain_num):
     #res = board.getFeedback(u6.AIN24(ain_num, _res_index, _gain_index, _settling_factor, _differential_inp))
     #return board.binaryToCalibratedAnalogVoltage(_gain_index, res[0])
     # following is same as above two lines.
-    return board.getAIN(ain_num, _res_index, _gain_index, _settling_factor, _differential_inp)
+    try: return board.getAIN(ain_num, _res_index, _gain_index, _settling_factor, _differential_inp)
+    except u6.LabJackException:
+        init_comm()
+        return 0.0
 
 def _set_DAC_output(board, dac_num, volts):
     # scale volts to bits:
     if dac_num == 0: bits = int(board.calInfo.dac0Slope*volts + board.calInfo.dac0Offset)
     elif dac_num == 1: bits = int(board.calInfo.dac1Slope*volts + board.calInfo.dac1Offset)
-    board.getFeedback(u6.DAC16(dac_num, bits))
+    try: board.getFeedback(u6.DAC16(dac_num, bits))
+    except u6.LabJackException: init_comm()
 
 class analog_mfc():
     name, in_id, out_id = None, None, None
