@@ -54,8 +54,9 @@ def _convert_script(script, starttime=0):
         t = str(t-t0)
         d, xothers = others.split(' ', 1)
         if d == 'call':
-            preamble, postscript = '# called the script:'+xothers[0]+'\n', '# script:'+xothers[0]+' ends here.\n'
-            subscript = _convert_script(' '.join(open(xothers[0]).readlines()), starttime=t_1)
+            subs_fname = strip(xothers) # this assumes that xothers has only the filename and nothing else.
+            preamble, postscript = '# called the script:'+subs_fname+'\n', '# script:'+subs_fname+' ends here.\n'
+            subscript = _convert_script(' '.join(open(subs_fname).readlines()), starttime=t_1)
             canon += ''.join([preamble, subscript, postscript])
         else: canon += ' '.join([t, others])+'\n'
     return canon
