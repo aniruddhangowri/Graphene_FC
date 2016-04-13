@@ -2,8 +2,14 @@ import serial
 from bidict import bidict
 
 def funcmap(devname, devid):
-    t = tvc(devname, devid)
-    return {'init_state': t.init_state, 'open': t.valve_open, 'close': t.valve_close, 
+    if devid[0]=='mfc-n2-1':
+        m = sierra_mfc(devname, devid)
+        c = {'init_state': m.init_state, 'get_flow': m.get_flow, 'set_flow': m.set_flow,
+            'get_curr_setp': m.get_curr_setp, 'get_fs_range': m.get_fs_range, 'handle': m}
+        return c #, [] #m.errcodes
+    else:
+        t = tvc(devname, devid)
+        c = {'init_state': t.init_state, 'open': t.valve_open, 'close': t.valve_close, 
             'get_pressure': t.get_pressure, 'get_position': t.get_position,
             'get_pressure_position': t.get_pressure_position,
             'get_setp_state': t.get_setp_state,
@@ -12,6 +18,121 @@ def funcmap(devname, devid):
             'set_setp_params': t.set_setp_params,
             'get_active_setp': t.get_actv_setp_ch,
             'activate_setp': t.activate_setp}
+        return c #, [] #t.errcodes
+
+
+import threading
+# timeout = 0.025 is minimum to not give communication errors. Raising it to larger values
+# increases the response times, for example at 0.1 s timeout, get_pressure_position is
+# returned in 240 ms, whereas it takes ~112 ms at 0.03 timeout (~105 ms at 0.025 timeout).
+# T3Bi typical response time is less than 20 ms, so it may be rs232-USB bridge that
+# is introducing additional delays.
+chan_d = {'tvc': {'lock':threading.RLock(), 'portname': "/dev/tty", 'port': None, 'timeout': 0.05, 'cmd_mod':'#'},
+            # cmd_modifiers: {\@: echo first char of command sent, \!: echo status and first char,
+            # \#: echo status and all chars of command sent}
+            'mfc-n2-1': {'lock': threading.RLock(), 'portname': "/dev/tty", 'port': None, 'timeout': 0.05}}
+
+import getport
+assoc_port = getport.associate_ports()
+def init_comm():
+    #identify which port belongs to tvc, the other belongs to mfc-n2-1.
+    # right now we just assign it blindly. 
+    chan_d['mfc-n2-1']['port'] = serial.Serial(assoc_port['mfc-n2-1']) #, timeout=chan_d['tvc']['timeout'])
+    chan_d['tvc']['port'] = serial.Serial(assoc_port['tvc'], timeout=chan_d['tvc']['timeout'])
+
+def finish_comm():
+    for k in chan_d.keys(): k['port'].close()
+
+_cmd_mod = chan_d['tvc']['cmd_mod']
+_cmd_status = bidict({'0': 'No error', '1': 'Unrecognised command', '2': 'Bad data value',\
+        '3': 'Command ignored', '4': 'Reserved for future use'}) 
+def _cmd_io(cmdstr, eps=50):
+    res = ''
+    with chan_d['tvc']['lock']:
+        chan_d['tvc']['port'].write(_cmd_mod+cmdstr+'\n')
+        if eps==0: return
+        else: res = chan_d['tvc']['port'].read(eps)[:-1]
+    #if len(res)==0: # time out occurred
+    #    raise TVC_Error('Timeout occurred', '')
+    if res[0] != '0': raise TVC_Error(_cmd_status[res[0]], res)
+    return res[1:]
+
+
+class sierra_mfc():
+    """Command - Resp format is (on RS232):
+    ? Cmd LRC CRLF = read command
+    ! Cmd LRC CRLF = write command
+    Cmd Val LRC CRLF = resp
+    LRC = 8 bit 2's complement of all chars till LRC CRLF bytes.
+    Other commands on MFC are: Zero. Reset Zero, Span.
+    Calculation of LRC doesnot match one of the 4 examples given in manual."""
+    name, devid, port = None, None, None
+    fs_range, curr_setp, actv_flow = 0.0, 0.0, 0.0
+    gas_name, units = None, None
+    errcodes = {-1: 'Reuqested flow is beyond range'}
+    ## these can be used directly to avoid calculating them every time.
+    ## but not used at the moment, as it will add complexity to cmd_io.
+    #cmdstrs = {
+    #        'units': '?Unts'+hex(self.lrc('?Unts'))[2:]+'\r\n', 
+    #        'gasname': '?Gnam'+hex(self.lrc('?Gnam'))[2:]+'\r\n', 
+    #        'serialno': '?Srnm'+hex(self.lrc('?Srnm'))[2:]+'\r\n', 
+    #        'versionno': '?Vrnm'+hex(self.lrc('?Vrnm'))[2:]+'\r\n', 
+    #        'fullscale': '?Fscl'+hex(self.lrc('?Fscl'))[2:]+'\r\n', 
+    #        'flow': '?Flow'+hex(self.lrc('?Flow'))[2:]+'\r\n', 
+    #        '': '?Unts'+hex(self.lrc('?Unts'))[2:]+'\r\n', 
+    #}
+    def __init__(self, name, devid):
+        self.name, self.devid = name, devid
+        self.io = chan_d[devid[0]]
+    def lrc(self, cmd):# calc redundancy check bytes for cmd
+        l = 0
+        for c in cmd: l += ord(c)
+        l = l%256
+        l = -l + (1 << 8)
+        l = l%256
+        return hex(l)[2:]
+    def cmd_io(self, cmdstr, calc=0):
+        #REM next line for normal behaviour.
+        return 'xxxx0.0'
+        res, c = '', None
+        with self.io['lock']:
+            cmdstr = cmdstr + self.lrc(cmdstr)+'\r\n'
+            self.io['port'].write(cmdstr)
+            while c!='\n':
+                c = self.io['port'].read()
+                res += c
+        # we don't do LRC check on return values.
+        return res[:-4]
+    def init_state(self, args):
+        self.fs_range, self.curr_setp = args['fs_range'], args['init_val']
+        self.set_flow([self.curr_setp])
+        self.get_flow([])
+    def set_flow(self, args):
+        s = float(args[0])
+        if 0 <= s <= self.fs_range: 
+            self.curr_setp = s
+            return 0, [self.cmd_io('!Setr%2.1f'%(s))[4:]]
+        else: return -1, [args[0]]
+    def get_flow(self, args):
+        res = float(self.cmd_io('?Flow')[4:])
+        self.actv_flow = res
+        return 0, ['%.3f'%(self.actv_flow)] # it can be negative due to noise, but we display positive.
+    def get_curr_setp(self, args):
+        return 0, [repr(self.curr_setp)]
+    def get_fs_range(self, args):
+        self.fs_range = float(self.cmd_io('?Fscl')[4:])
+        return 0, [repr(self.fs_range)]
+    def get_gas_name(self, args):
+        self.gas_name = self.cmd_io('?Gnam')[4:]
+        return 0, [self.gas_name]
+    def get_units(self, args):
+        self.units = self.cmd_io('?Unts')[4:]
+        return 0, [self.units]
+    def get_info(self, args):
+        ver = self.cmd_io('?Vern')[4:]
+        ser = self.cmd_io('?Srnm')[4:]
+        return 0, ['Version no.: '+ver, 'Serial No.: '+ser]
+
 
 class tvc():
     name = None
@@ -168,49 +289,6 @@ class TVC_Error(Exception):
         return repr(self.value)
 
 
-# to test:
-# tvc.init_comm()
-# tvc.get_version()
-# tvc.get_status()
-# tvc.get_position()
-# tvc.get_press()
-
-import threading
-# timeout = 0.025 is minimum to not give communication errors. Raising it to larger values
-# increases the response times, for example at 0.1 s timeout, get_pressure_position is
-# returned in 240 ms, whereas it takes ~112 ms at 0.03 timeout (~105 ms at 0.025 timeout).
-# T3Bi typical response time is less than 20 ms, so it may be rs232-USB bridge that
-# is introducing additional delays.
-chan_d = {'lock':threading.RLock(), 'portname': "/dev/tty", 'port': None, 'timeout': 0.05}
-tvc_d = {'low_gauge_FS': 1, 'high_gauge_FS': 1000, 'actv_gauge': 'H', 'cmd_mod':'#'}
-# cmd_modifiers: {\@: echo first char of command sent, \!: echo status and first char,
-# \#: echo status and all chars of command sent}
-
-def init_comm(d='USB0'): _set_port(_port_open(d))
-def _port_open(d): return serial.Serial(chan_d['portname']+d, timeout=chan_d['timeout'])
-def _port_close(): tvc_d['port'].close()
-def _set_port(p): 
-    global chan_d
-    chan_d['port'] = p
-
-_cmd_mod = tvc_d['cmd_mod']
-_cmd_status = bidict({'0': 'No error', '1': 'Unrecognised command', '2': 'Bad data value',\
-        '3': 'Command ignored', '4': 'Reserved for future use'}) 
-def _cmd_io(cmdstr, eps=50):
-    res = ''
-    with chan_d['lock']:
-        chan_d['port'].write(_cmd_mod+cmdstr+'\n')
-        if eps==0: return
-        else: res = chan_d['port'].read(eps)[:-1]
-    #if len(res)==0: # time out occurred
-    #    raise TVC_Error('Timeout occurred', '')
-    if res[0] != '0': raise TVC_Error(_cmd_status[res[0]], res)
-    return res[1:]
-
-#def send(s): with chan_d['lock']: chan_d['port'].write(cmd_mod+s+'\n')
-#def recv(sz=50): # read all and remove the newline at the end
-#    with chan_d['lock']: s = chan_state['port'].read(sz)[:-1]
-#    # check status if s[0] != '0': raise TVC_Error(_cmd_status[s[0]]); return s[1:]
     
 def _get_all_state():
     return {

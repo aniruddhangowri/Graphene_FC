@@ -20,7 +20,7 @@
 # In following: map= { devname: [channelname, idnumber] .. }
 
 _tvc = {
-    'conn': 'rs232', 'devid': None, 
+    'conn': 'rs232', 'devid': ['tvc'], 
     'init_params': {
         'manual-setp': 'Close', # this is the initial state
         'setpoints': [# name, mode, val, softstartval
@@ -55,7 +55,8 @@ _mfc_ch4_2 = {'conn':'rs485', 'devid':33, 'init_params': {'fs_range': 10.0, 'ini
 # The DIO lines are used to control pneumatic switches, so number of switches
 # that can be controlled is reduced in that case. 
 _mfc_h2_1 = {'conn':'labjack', 'devid':['AIO', 2, 0], 'init_params': {'fs_range': 2000.0, 'init_val': 0.0}}
-_mfc_n2_1 = {'conn':'labjack', 'devid':['AIO', 3, 1], 'init_params': {'fs_range': 100.0, 'init_val': 1.0}}
+#mfc_n2_1 = {'conn':'labjack', 'devid':['AIO', 3, 1], 'init_params': {'fs_range': 100.0, 'init_val': 1.0}}
+_mfc_n2_1 = {'conn':'rs232', 'devid':['mfc-n2-1'], 'init_params': {'fs_range': 50.0, 'init_val': 1.0}}
 
 # On the relay board which controls the switches, there are 12 switches which
 # controlled by EIO/CIO (8/4) lines. EIO are addressed as digital I/O bits 8 
@@ -93,7 +94,7 @@ _sw_before_pump = {'conn':'labjack', 'devid':['DIO', 10], 'init_params': {'defau
 _sw_ventline = {'conn':'labjack', 'devid':['DIO', 9], 'init_params': {'default': 'noflow', 'init_val':'noflow'}}
 _sw_n2_1_by = {'conn':'labjack', 'devid':['DIO', 8], 'init_params': {'default': 'noflow', 'init_val':'noflow'}}
 
-devlist = {'tvc':_tvc,\
+devlist = { 'tvc':_tvc,\
         'mfc-ch4-1':_mfc_ch4_1, 'mfc-ch4-2':_mfc_ch4_2,\
         'mfc-h2-1':_mfc_h2_1, 'mfc-n2-1':_mfc_n2_1, 
         'sw-before-pump':_sw_before_pump,\
